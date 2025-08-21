@@ -37,10 +37,10 @@ type State = {
   targets: Target[];
 
   // user preferences
-  choicesRecipe: Record<string, string | null>; // exact recipe picked for product
-  choicesBuilding: Record<string, string>; // preferred building for product
+  choicesRecipe: Record<string, string | null>;
+  choicesBuilding: Record<string, string>;
 
-  // per-node expansion counters (clicking +1 / +3 adds hops on THAT node only)
+  // per-node expansion counters
   expandedByNode: Record<string, number>;
 
   // graph
@@ -48,7 +48,7 @@ type State = {
   graphEdges: GraphEdge[];
   totals: Totals;
 
-  // focus/compact (used by ChainGraph)
+  // focus/compact
   focusedNodeId: string | null;
   compactMode: boolean;
 
@@ -57,17 +57,14 @@ type State = {
   setChoiceRecipe: (product: string, recipeId: string | null) => void;
   setChoiceBuilding: (product: string, building: string) => void;
 
-  build: () => void; // builds current graph honoring per-node expansions
+  build: () => void;
   resetExpansions: () => void;
 
-  // branch expansion (NODE-SPECIFIC now)
   expandNodeOnce: (nodeId: string) => void;
   expandBranchBy: (nodeId: string, hops: number) => void;
 
-  // recipe swap (preserve branch expansion by migrating expansion budget to new node id)
   swapNodeRecipe: (nodeId: string, recipeId: string) => void;
 
-  // focus/compact
   setFocusedNode: (id: string | null) => void;
   toggleFocus: (id: string) => void;
   toggleCompactMode: () => void;
@@ -76,12 +73,10 @@ type State = {
 };
 
 // ========== Helpers ==========
-/** Deterministic node id so ReactFlow keeps nodes stable across rebuilds. */
 function nodeIdFor(product: string, recipeId: string) {
   return `${product}::${recipeId}`;
 }
 
-/** Create a graph node from a recipe and a product rate. */
 function makeNode(
   recipe: Recipe,
   targetProduct: string,
@@ -132,7 +127,6 @@ function computeTotals(nodes: GraphNode[]): Totals {
   return { raw, byproducts };
 }
 
-/** Preference order: explicit recipe -> parent building -> stored building -> default */
 function pickRecipeWithPrefs(
   product: string,
   explicitRecipe: string | null | undefined,
@@ -164,6 +158,7 @@ export const usePlanner = create<State>((set, get) => ({
   choicesRecipe: {},
   choicesBuilding: {},
 
+  // NOTE: keep it defined even across HMR
   expandedByNode: {},
 
   graphNodes: [],
@@ -181,23 +176,22 @@ export const usePlanner = create<State>((set, get) => ({
       const chosen = recipeId ? list.find((r) => r.recipeId === recipeId) : undefined;
       const b = chosen?.building;
       return {
-        choicesRecipe: { ...s.choicesRecipe, [product]: recipeId },
-        choicesBuilding: b ? { ...s.choicesBuilding, [product]: b } : s.choicesBuilding,
+        choicesRecipe: { ...(s.choicesRecipe || {}), [product]: recipeId },
+        choicesBuilding: b
+          ? { ...(s.choicesBuilding || {}), [product]: b }
+          : (s.choicesBuilding || {}),
       };
     }),
 
   setChoiceBuilding: (product, building) =>
-    set((s) => ({ choicesBuilding: { ...s.choicesBuilding, [product]: building } })),
+    set((s) => ({ choicesBuilding: { ...(s.choicesBuilding || {}), [product]: building } })),
 
-  /** Build the graph once:
-   *  - Always render roots + one upstream hop (baseline)
-   *  - Then expand per-node according to `expandedByNode` counters
-   */
   build: () => {
     const s = get();
-    const { targets, choicesRecipe, choicesBuilding, expandedByNode } = s;
+    const { targets, choicesRecipe, choicesBuilding } = s;
+    const expandedByNode = s.expandedByNode || {};
 
-    if (!targets.length) {
+    if (!targets || targets.length === 0) {
       set({ graphNodes: [], graphEdges: [], totals: { raw: {}, byproducts: {} } });
       return;
     }
@@ -205,7 +199,6 @@ export const usePlanner = create<State>((set, get) => ({
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
 
-    // Merge identical (product, recipeId) into a single node
     const byKey = new Map<string, GraphNode>();
     const byId = new Map<string, GraphNode>();
 
@@ -217,8 +210,8 @@ export const usePlanner = create<State>((set, get) => ({
     ): GraphNode | undefined {
       const r = pickRecipeWithPrefs(
         product,
-        choicesRecipe[product],
-        choicesBuilding[product],
+        choicesRecipe?.[product],
+        choicesBuilding?.[product],
         parentBuilding
       );
       if (!r) return undefined;
@@ -239,18 +232,18 @@ export const usePlanner = create<State>((set, get) => ({
       edges.push({ id, source: parent.id, target: child.id, label });
     }
 
-    // --- Step 1: build roots + one hop (baseline)
+    // roots + one hop
     for (const t of targets) {
       const root = ensureNode(t.product, t.ratePerMin, 0);
       if (!root) continue;
       for (const i of root.inputs) {
-        if (!PRODUCT_INDEX[i.name]) continue; // raw
+        if (!PRODUCT_INDEX[i.name]) continue;
         const child = ensureNode(i.name, i.ratePerMin, 1, root.building);
         if (child) connect(root, child, i.name);
       }
     }
 
-    // --- Step 2: seed BFS using per-node expansions only
+    // BFS using per-node budgets
     type QItem = { id: string; rem: number };
     const bestRem = new Map<string, number>();
     const queue: QItem[] = [];
@@ -263,7 +256,6 @@ export const usePlanner = create<State>((set, get) => ({
       }
     }
 
-    // --- Step 3: BFS expand while we have remaining hops
     while (queue.length) {
       const { id, rem } = queue.shift()!;
       if (rem <= 0) continue;
@@ -305,23 +297,22 @@ export const usePlanner = create<State>((set, get) => ({
 
   resetExpansions: () => set({ expandedByNode: {} }),
 
-  /** +1 hop for THIS node id only, then rebuild. */
   expandNodeOnce: (nodeId) => {
     const s = get();
-    const cur = s.expandedByNode[nodeId] ?? 0;
-    set({ expandedByNode: { ...s.expandedByNode, [nodeId]: cur + 1 } });
+    const map = s.expandedByNode || {};
+    const cur = map[nodeId] ?? 0;
+    set({ expandedByNode: { ...map, [nodeId]: cur + 1 } });
     s.build();
   },
 
-  /** +N hops for THIS node id only, then rebuild. */
   expandBranchBy: (nodeId, hops) => {
     const s = get();
-    const cur = s.expandedByNode[nodeId] ?? 0;
-    set({ expandedByNode: { ...s.expandedByNode, [nodeId]: cur + Math.max(1, hops) } });
+    const map = s.expandedByNode || {};
+    const cur = map[nodeId] ?? 0;
+    set({ expandedByNode: { ...map, [nodeId]: cur + Math.max(1, hops) } });
     s.build();
   },
 
-  /** Swap the recipe at a node and rebuild (migrates expansion budget to the new node id). */
   swapNodeRecipe: (nodeId, recipeId) => {
     const s = get();
     const node = s.graphNodes.find((n) => n.id === nodeId);
@@ -331,26 +322,22 @@ export const usePlanner = create<State>((set, get) => ({
     const chosen = list.find((r) => r.recipeId === recipeId);
     const building = chosen?.building;
 
-    // migrate expansion counter from old node id -> new node id
-    const prevBudget = s.expandedByNode[nodeId] ?? 0;
+    const prevBudget = (s.expandedByNode || {})[nodeId] ?? 0;
     const newId = nodeIdFor(node.product, recipeId);
 
-    const nextExpanded = { ...s.expandedByNode };
-    if (prevBudget > 0) {
-      nextExpanded[newId] = Math.max(prevBudget, nextExpanded[newId] ?? 0);
-    }
+    const nextExpanded = { ...(s.expandedByNode || {}) };
+    if (prevBudget > 0) nextExpanded[newId] = Math.max(prevBudget, nextExpanded[newId] ?? 0);
     delete nextExpanded[nodeId];
 
     set({
-      choicesRecipe: { ...s.choicesRecipe, [node.product]: recipeId },
-      choicesBuilding: building ? { ...s.choicesBuilding, [node.product]: building } : s.choicesBuilding,
+      choicesRecipe: { ...(s.choicesRecipe || {}), [node.product]: recipeId },
+      choicesBuilding: building ? { ...(s.choicesBuilding || {}), [node.product]: building } : (s.choicesBuilding || {}),
       expandedByNode: nextExpanded,
     });
 
     s.build();
   },
 
-  // focus/compact utilities used by ChainGraph
   setFocusedNode: (id) => set({ focusedNodeId: id }),
   toggleFocus: (id) =>
     set((st) => ({ focusedNodeId: st.focusedNodeId === id ? null : id })),
