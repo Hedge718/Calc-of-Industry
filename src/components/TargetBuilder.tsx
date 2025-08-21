@@ -1,183 +1,147 @@
 import React, { useMemo, useState } from "react";
 import { usePlanner } from "../state/store";
+import { ALL_PRODUCTS } from "../lib/buildIndex";
 
 export default function TargetBuilder() {
   const {
     products,
-    setTarget,
-    build,
     targets,
     totals,
-    frontierNeeds,
-    compactMode,
-    toggleCompactMode,
+    setTarget,
+    build,
+    choicesRecipe,
+    choicesBuilding,
   } = usePlanner();
 
-  // initial form state
-  const [product, setProduct] = useState(targets[0]?.product ?? "");
-  const [rate, setRate] = useState(() =>
-    targets[0]?.ratePerMin ? String(targets[0].ratePerMin) : ""
+  // safe fallbacks for any possibly undefined store slices
+  const safeTotals = totals ?? { raw: {}, byproducts: {} };
+  const rawMap = safeTotals.raw ?? {};
+  const byMap = safeTotals.byproducts ?? {};
+  const safeProducts = (products && products.length ? products : ALL_PRODUCTS) ?? [];
+
+  // local form state
+  const [product, setProduct] = useState<string>(targets?.[0]?.product ?? "");
+  const [rateStr, setRateStr] = useState<string>(
+    targets?.[0]?.ratePerMin != null ? String(targets[0].ratePerMin) : ""
   );
 
-  // valid flag + parsed number
-  const rateNum = Number(rate);
-  const valid = product.trim().length > 0 && Number.isFinite(rateNum) && rateNum > 0;
+  const currentRate = useMemo(() => {
+    const v = parseFloat(rateStr);
+    return Number.isFinite(v) && v >= 0 ? v : 0;
+  }, [rateStr]);
 
-  // submit
-  const onGenerate = () => {
-    if (!valid) return;
-    setTarget({ product: product.trim(), ratePerMin: rateNum });
-    build();
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!product || currentRate <= 0) return;
+    setTarget({ product, ratePerMin: currentRate, recipeId: null });
+    build(); // rebuild graph
   };
 
-  // allow Enter in either input to submit
-  const onKeyDown: React.KeyboardEventHandler<HTMLInputElement> = (e) => {
-    if (e.key === "Enter") onGenerate();
-  };
-
-  // datalist options (keep it light: up to 600 visible to avoid massive DOM lists)
-  const productOptions = useMemo(
-    () => products.slice(0, 600),
-    [products]
-  );
+  // Derived debug/meta info (defensively guarded)
+  const recipePrefCount = Object.keys(choicesRecipe ?? {}).length;
+  const buildingPrefCount = Object.keys(choicesBuilding ?? {}).length;
 
   return (
     <aside
       className="panel"
       style={{
-        // harden sidebar width so it never grows too wide
-        width: 320,
-        minWidth: 320,
-        maxWidth: 320,
+        width: "100%",
+        maxWidth: 360,             // keep panel narrow again
         padding: 12,
         boxSizing: "border-box",
-        position: "relative",
-        overflow: "auto",
       }}
     >
-      <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 12 }}>Target Builder</div>
+      <h3 style={{ margin: "4px 0 10px 0" }}>Target Builder</h3>
 
-      {/* Product selector: input + datalist (type to filter, click to pick) */}
-      <label style={{ fontSize: 12 }}>Product</label>
-      <input
-        className="input"
-        list="__products_list"
-        value={product}
-        onChange={(e) => setProduct(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder="Type to search…"
-        style={{ width: "100%" }}
-      />
-      <datalist id="__products_list">
-        {productOptions.map((p) => (
-          <option value={p} key={p} />
-        ))}
-      </datalist>
+      <form onSubmit={onSubmit} style={{ display: "grid", gap: 8 }}>
+        <label style={{ fontSize: 12, color: "var(--muted)" }}>Product</label>
+        <input
+          className="input"
+          list="product-list"
+          placeholder="Start typing…"
+          value={product}
+          onChange={(e) => setProduct(e.target.value)}
+        />
+        <datalist id="product-list">
+          {safeProducts.map((p) => (
+            <option key={p} value={p} />
+          ))}
+        </datalist>
 
-      <label style={{ fontSize: 12, marginTop: 8 }}>Required rate (units/min)</label>
-      <input
-        className="input"
-        value={rate}
-        onChange={(e) => setRate(e.target.value)}
-        onKeyDown={onKeyDown}
-        inputMode="decimal"
-        placeholder="e.g. 144"
-        style={{ width: "100%" }}
-      />
+        <label style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+          Required rate (units/min)
+        </label>
+        <input
+          className="input"
+          inputMode="decimal"
+          placeholder="e.g. 144"
+          value={rateStr}
+          onChange={(e) => setRateStr(e.target.value)}
+        />
 
-      <button
-        className="btn btn-primary"
-        style={{ width: "100%", marginTop: 10, opacity: valid ? 1 : 0.6 }}
-        onClick={onGenerate}
-        disabled={!valid}
-      >
-        Generate / Update Chain
-      </button>
+        <button type="submit" className="btn btn-primary" style={{ marginTop: 6 }}>
+          Generate / Update Chain
+        </button>
+      </form>
 
+      {/* Small helpers (optional) */}
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button className="btn" onClick={toggleCompactMode} title="Toggle compact node cards">
-          {compactMode ? "Detailed mode" : "Compact mode"}
+        <button
+          className="btn"
+          title="Decrease upstream depth"
+          onClick={() => {
+            // no global depth anymore; user expands from nodes
+            // this is kept for layout consistency – no-op
+          }}
+        >
+          - Depth
+        </button>
+        <button
+          className="btn"
+          title="Increase upstream depth"
+          onClick={() => {
+            // no global depth anymore; user expands from nodes
+          }}
+        >
+          + Depth
         </button>
       </div>
 
-      <div style={{ marginTop: 12, color: "var(--muted)", fontSize: 12, lineHeight: 1.4 }}>
-        <b>Tip:</b> The <i>Frontier requirements</i> show what you must supply to your current
-        upstream frontier. Expanding branches pushes the frontier upstream and changes this list.
+      <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+        Tip: You’ll pick the building/recipe in a popup on each card. Default view shows one
+        upstream hop – expand with the + buttons on any node.
+      </p>
+
+      <hr style={{ margin: "12px 0" }} />
+
+      <h4 style={{ margin: "0 0 6px 0" }}>Totals</h4>
+
+      <div style={{ fontSize: 12 }}>
+        <div style={{ fontWeight: 700, marginTop: 6 }}>Raw resources (req/min)</div>
+        <ul style={{ margin: "6px 0 0 16px" }}>
+          {Object.keys(rawMap).length === 0 && <li>—</li>}
+          {Object.keys(rawMap).map((k) => (
+            <li key={k}>
+              {k}: {rawMap[k].toFixed ? rawMap[k].toFixed(2) : rawMap[k]}
+            </li>
+          ))}
+        </ul>
+
+        <div style={{ fontWeight: 700, marginTop: 10 }}>Byproducts (prod/min)</div>
+        <ul style={{ margin: "6px 0 0 16px" }}>
+          {Object.keys(byMap).length === 0 && <li>—</li>}
+          {Object.keys(byMap).map((k) => (
+            <li key={k}>
+              {k}: {byMap[k].toFixed ? byMap[k].toFixed(2) : byMap[k]}
+            </li>
+          ))}
+        </ul>
       </div>
 
-      <hr style={{ margin: "12px 0", borderColor: "var(--border)" }} />
-
-      {/* Frontier requirements */}
-      <Section title="Frontier requirements (req/min)">
-        {Object.keys(frontierNeeds).length === 0 ? (
-          <Empty />
-        ) : (
-          <ul style={{ margin: "6px 0 0 16px" }}>
-            {Object.entries(frontierNeeds)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([name, val]) => (
-                <li key={name}>
-                  {name}: {val}
-                </li>
-              ))}
-          </ul>
-        )}
-      </Section>
-
-      {/* Raw resources */}
-      <Section title="Raw resources (req/min)" top={14}>
-        {Object.keys(totals.raw).length === 0 ? (
-          <Empty />
-        ) : (
-          <ul style={{ margin: "6px 0 0 16px" }}>
-            {Object.entries(totals.raw)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([name, val]) => (
-                <li key={name}>
-                  {name}: {val}
-                </li>
-              ))}
-          </ul>
-        )}
-      </Section>
-
-      {/* Byproducts */}
-      <Section title="Byproducts (prod/min)" top={14}>
-        {Object.keys(totals.byproducts).length === 0 ? (
-          <Empty />
-        ) : (
-          <ul style={{ margin: "6px 0 0 16px" }}>
-            {Object.entries(totals.byproducts)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([name, val]) => (
-                <li key={name}>
-                  {name}: {val}
-                </li>
-              ))}
-          </ul>
-        )}
-      </Section>
+      {/* Optional: show small debug line for prefs (safe-guarded) */}
+      <div style={{ marginTop: 12, fontSize: 11, color: "var(--muted)" }}>
+        Prefs — recipes: {recipePrefCount}, buildings: {buildingPrefCount}
+      </div>
     </aside>
   );
-}
-
-function Section({
-  title,
-  top = 0,
-  children,
-}: {
-  title: string;
-  top?: number;
-  children: React.ReactNode;
-}) {
-  return (
-    <section style={{ marginTop: top }}>
-      <div style={{ fontWeight: 800 }}>{title}</div>
-      {children}
-    </section>
-  );
-}
-
-function Empty() {
-  return <div style={{ color: "var(--muted)" }}>—</div>;
 }
