@@ -1,21 +1,13 @@
 {
   "compilerOptions": {
-    "target": "ESNext",                  // modern output
-    "useDefineForClassFields": true,     // aligns with latest JS spec
-    "lib": ["DOM", "DOM.Iterable", "ESNext"], // DOM + latest JS
-    "allowJs": false,
-    "skipLibCheck": true,
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM"],
+    "jsx": "react-jsx",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "strict": true,                      // best practice for type safety
-    "forceConsistentCasingInFileNames": true,
-    "module": "ESNext",
-    "moduleResolution": "bundler",       // good for Vite
-    "resolveJsonModule": true,           // lets you import JSON
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx"                   // for React 17+ JSX transform
+    "skipLibCheck": true,
+    "strict": true
   },
-  "include": ["src"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src"]
 }
