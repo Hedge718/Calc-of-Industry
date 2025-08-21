@@ -54,18 +54,6 @@ const GearIcon = ({ size = 16 }: { size?: number }) => (
   </svg>
 );
 
-const PlusIcon = ({ size = 16 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
-    <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-  </svg>
-);
-
-const CollapseIcon = ({ size = 16 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
-    <path d="M8 10l4 4 4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-  </svg>
-);
-
 /* ───────────────────────── Component ───────────────────────── */
 
 export default function ChainGraph() {
@@ -74,8 +62,6 @@ export default function ChainGraph() {
     graphEdges,
     expandNodeOnce,
     expandBranchBy,
-    expandBranchAll,
-    collapseBranch,
     swapNodeRecipe,
     focusedNodeId,
     setFocusedNode,
@@ -183,12 +169,11 @@ export default function ChainGraph() {
               <span>•</span>
               <span>Builds: <b>{buildingsCeil}</b></span>
             </div>
-            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+            {/* horizontal action row: gear, +1, +3 */}
+            <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "center", flexWrap: "nowrap" }}>
               <IconBtn title="Change building/recipe" onClick={() => openPickerFor(n.id)}><GearIcon/></IconBtn>
-              <IconBtn title="Expand +1" onClick={() => expandNodeOnce(n.id)}><PlusIcon/></IconBtn>
-              <IconBtn title="Expand +2" onClick={() => expandBranchBy(n.id, 2)}>+2</IconBtn>
+              <IconBtn title="Expand +1" onClick={() => expandNodeOnce(n.id)}>+1</IconBtn>
               <IconBtn title="Expand +3" onClick={() => expandBranchBy(n.id, 3)}>+3</IconBtn>
-              <IconBtn title="Expand all" onClick={() => expandBranchAll(n.id)}>All</IconBtn>
             </div>
           </div>
         </div>
@@ -254,14 +239,11 @@ export default function ChainGraph() {
               ))}
             </div>
 
-            {/* Compact icon row to avoid overflow */}
-            <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+            {/* horizontal action row: gear, +1, +3 */}
+            <div style={{ display: "flex", gap: 8, marginTop: 8, justifyContent: "center", flexWrap: "nowrap" }}>
               <IconBtn title="Change building/recipe" onClick={() => openPickerFor(n.id)}><GearIcon/></IconBtn>
-              <IconBtn title="Expand +1" onClick={() => expandNodeOnce(n.id)}><PlusIcon/></IconBtn>
-              <IconBtn onClick={() => expandBranchBy(n.id, 2)} title="Expand +2">+2</IconBtn>
-              <IconBtn onClick={() => expandBranchBy(n.id, 3)} title="Expand +3">+3</IconBtn>
-              <IconBtn onClick={() => expandBranchAll(n.id)} title="Expand all">All</IconBtn>
-              <IconBtn onClick={() => collapseBranch(n.id)} title="Collapse branch"><CollapseIcon/></IconBtn>
+              <IconBtn title="Expand +1" onClick={() => expandNodeOnce(n.id)}>+1</IconBtn>
+              <IconBtn title="Expand +3" onClick={() => expandBranchBy(n.id, 3)}>+3</IconBtn>
             </div>
 
             {currentRecipe && buildingMap[currentRecipe.building]?.length > 1 && (
@@ -292,8 +274,6 @@ export default function ChainGraph() {
     compactMode,
     expandNodeOnce,
     expandBranchBy,
-    expandBranchAll,
-    collapseBranch,
     toggleFocus,
   ]);
 
@@ -489,7 +469,7 @@ export default function ChainGraph() {
   );
 }
 
-/* ───────────────────────── Tiny icon button ───────────────────────── */
+/* ───────────────────────── Tiny icon button (fixed size; horizontal row) ───────────────────────── */
 
 function IconBtn({
   children,
@@ -506,9 +486,9 @@ function IconBtn({
       title={title}
       onClick={onClick}
       style={{
-        minWidth: 28,
+        minWidth: 36,
         height: 28,
-        padding: "0 6px",
+        padding: "0 8px",
         lineHeight: 1,
         display: "inline-flex",
         alignItems: "center",
