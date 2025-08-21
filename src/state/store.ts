@@ -11,7 +11,7 @@ import {
 export type NodeIO = { name: string; ratePerMin: number };
 
 export type GraphNode = {
-  id: string;                 // stable: product::recipeId
+  id: string; // stable: product::recipeId
   product: string;
   recipeId: string;
   building: string;
@@ -31,57 +31,57 @@ type Totals = {
   byproducts: Record<string, number>;
 };
 
-// ========== State ==========
 type State = {
   products: string[];
   recipes: Recipe[];
   targets: Target[];
 
   // user preferences
-  choicesRecipe: Record<string, string | null>;   // exact recipe picked for product
-  choicesBuilding: Record<string, string>;        // preferred building for product
+  choicesRecipe: Record<string, string | null>; // exact recipe picked for product
+  choicesBuilding: Record<string, string>; // preferred building for product
 
-  // per-product expansion counters (clicking "Expand upstream" adds 1)
-  expandedByProduct: Record<string, number>;
+  // per-node expansion counters (clicking +1 / +3 adds hops on THAT node only)
+  expandedByNode: Record<string, number>;
 
   // graph
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
   totals: Totals;
 
-  // NEW: frontier needs (inputs of leaf nodes per minute)
-  frontierNeeds: Record<string, number>;
-
-  // NEW: focus & compact modes
+  // focus/compact (used by ChainGraph)
   focusedNodeId: string | null;
   compactMode: boolean;
-
-  setFocusedNode: (id: string | null) => void;
-  toggleFocus: (id: string) => void;
-  setCompactMode: (on: boolean) => void;
-  toggleCompactMode: () => void;
 
   // actions
   setTarget: (t: Target) => void;
   setChoiceRecipe: (product: string, recipeId: string | null) => void;
   setChoiceBuilding: (product: string, building: string) => void;
 
-  build: () => void;                             // builds current graph honoring expansions
-  resetExpansions: () => void;                   // clear all per-product expansions
-  expandNodeOnce: (nodeId: string) => void;      // +1 hop for node.product then rebuild
-  expandBranchBy: (nodeId: string, hops: number) => void; // expand *upstream branch* by N
-  expandBranchAll: (nodeId: string) => void;     // expand upstream branch to raw (large N)
-  collapseBranch: (nodeId: string) => void;      // collapse upstream branch to 0
+  build: () => void; // builds current graph honoring per-node expansions
+  resetExpansions: () => void;
+
+  // branch expansion (NODE-SPECIFIC now)
+  expandNodeOnce: (nodeId: string) => void;
+  expandBranchBy: (nodeId: string, hops: number) => void;
+
+  // recipe swap (preserve branch expansion by migrating expansion budget to new node id)
   swapNodeRecipe: (nodeId: string, recipeId: string) => void;
+
+  // focus/compact
+  setFocusedNode: (id: string | null) => void;
+  toggleFocus: (id: string) => void;
+  toggleCompactMode: () => void;
 
   recomputeTotals: () => void;
 };
 
 // ========== Helpers ==========
+/** Deterministic node id so ReactFlow keeps nodes stable across rebuilds. */
 function nodeIdFor(product: string, recipeId: string) {
   return `${product}::${recipeId}`;
 }
 
+/** Create a graph node from a recipe and a product rate. */
 function makeNode(
   recipe: Recipe,
   targetProduct: string,
@@ -132,21 +132,6 @@ function computeTotals(nodes: GraphNode[]): Totals {
   return { raw, byproducts };
 }
 
-/** Inputs needed at the current frontier (sum inputs of all leaf nodes). */
-function computeFrontierNeeds(nodes: GraphNode[], edges: GraphEdge[]) {
-  const hasChild = new Set(edges.map((e) => e.source));
-  const leaves = nodes.filter((n) => !hasChild.has(n.id));
-  const needs: Record<string, number> = {};
-  for (const leaf of leaves) {
-    for (const i of leaf.inputs) {
-      needs[i.name] = (needs[i.name] || 0) + i.ratePerMin;
-    }
-  }
-  const r2 = (x: number) => Math.round(x * 100) / 100;
-  for (const k in needs) needs[k] = r2(needs[k]);
-  return needs;
-}
-
 /** Preference order: explicit recipe -> parent building -> stored building -> default */
 function pickRecipeWithPrefs(
   product: string,
@@ -179,21 +164,14 @@ export const usePlanner = create<State>((set, get) => ({
   choicesRecipe: {},
   choicesBuilding: {},
 
-  expandedByProduct: {},
+  expandedByNode: {},
 
   graphNodes: [],
   graphEdges: [],
   totals: { raw: {}, byproducts: {} },
 
-  frontierNeeds: {},
-
-  // focus & compact
   focusedNodeId: null,
   compactMode: false,
-  setFocusedNode: (id) => set({ focusedNodeId: id }),
-  toggleFocus: (id) => set((s) => ({ focusedNodeId: s.focusedNodeId === id ? null : id })),
-  setCompactMode: (on) => set({ compactMode: on }),
-  toggleCompactMode: () => set((s) => ({ compactMode: !s.compactMode })),
 
   setTarget: (t) => set({ targets: [t] }),
 
@@ -212,20 +190,15 @@ export const usePlanner = create<State>((set, get) => ({
     set((s) => ({ choicesBuilding: { ...s.choicesBuilding, [product]: building } })),
 
   /** Build the graph once:
-   *  - Always render roots + 1 upstream hop (default collapsed view)
-   *  - Then expand per-product according to `expandedByProduct` counters
+   *  - Always render roots + one upstream hop (baseline)
+   *  - Then expand per-node according to `expandedByNode` counters
    */
   build: () => {
     const s = get();
-    const { targets, choicesRecipe, choicesBuilding, expandedByProduct } = s;
+    const { targets, choicesRecipe, choicesBuilding, expandedByNode } = s;
 
     if (!targets.length) {
-      set({
-        graphNodes: [],
-        graphEdges: [],
-        totals: { raw: {}, byproducts: {} },
-        frontierNeeds: {},
-      });
+      set({ graphNodes: [], graphEdges: [], totals: { raw: {}, byproducts: {} } });
       return;
     }
 
@@ -242,7 +215,12 @@ export const usePlanner = create<State>((set, get) => ({
       depth: number,
       parentBuilding?: string
     ): GraphNode | undefined {
-      const r = pickRecipeWithPrefs(product, choicesRecipe[product], choicesBuilding[product], parentBuilding);
+      const r = pickRecipeWithPrefs(
+        product,
+        choicesRecipe[product],
+        choicesBuilding[product],
+        parentBuilding
+      );
       if (!r) return undefined;
 
       const key = nodeIdFor(product, r.recipeId);
@@ -272,13 +250,13 @@ export const usePlanner = create<State>((set, get) => ({
       }
     }
 
-    // --- Step 2: seed BFS from every node using only per-product expansion counters
+    // --- Step 2: seed BFS using per-node expansions only
     type QItem = { id: string; rem: number };
     const bestRem = new Map<string, number>();
     const queue: QItem[] = [];
 
     for (const n of nodes) {
-      const extra = expandedByProduct[n.product] ?? 0;
+      const extra = expandedByNode[n.id] ?? 0;
       if (extra > 0) {
         bestRem.set(n.id, extra);
         queue.push({ id: n.id, rem: extra });
@@ -292,7 +270,7 @@ export const usePlanner = create<State>((set, get) => ({
       const parent = byId.get(id);
       if (!parent) continue;
 
-      const effParent = Math.max(rem, expandedByProduct[parent.product] ?? 0);
+      const effParent = Math.max(rem, expandedByNode[parent.id] ?? 0);
 
       for (const i of parent.inputs) {
         if (!PRODUCT_INDEX[i.name]) continue;
@@ -305,7 +283,7 @@ export const usePlanner = create<State>((set, get) => ({
         }
 
         const nextRem = effParent - 1;
-        const childExtra = expandedByProduct[child.product] ?? 0;
+        const childExtra = expandedByNode[child.id] ?? 0;
         const childAllowance = Math.max(nextRem, childExtra);
 
         if (childAllowance > 0) {
@@ -322,93 +300,28 @@ export const usePlanner = create<State>((set, get) => ({
       graphNodes: nodes,
       graphEdges: edges,
       totals: computeTotals(nodes),
-      frontierNeeds: computeFrontierNeeds(nodes, edges),
     });
   },
 
-  resetExpansions: () => set({ expandedByProduct: {} }),
+  resetExpansions: () => set({ expandedByNode: {} }),
 
+  /** +1 hop for THIS node id only, then rebuild. */
   expandNodeOnce: (nodeId) => {
     const s = get();
-    const node = s.graphNodes.find((n) => n.id === nodeId);
-    if (!node) return;
-    const cur = s.expandedByProduct[node.product] ?? 0;
-    set({ expandedByProduct: { ...s.expandedByProduct, [node.product]: cur + 1 } });
+    const cur = s.expandedByNode[nodeId] ?? 0;
+    set({ expandedByNode: { ...s.expandedByNode, [nodeId]: cur + 1 } });
     s.build();
   },
 
+  /** +N hops for THIS node id only, then rebuild. */
   expandBranchBy: (nodeId, hops) => {
     const s = get();
-    if (hops <= 0) return;
-    const nodeById = new Map(s.graphNodes.map((n) => [n.id, n] as const));
-    const parentsByChild = new Map<string, string[]>();
-    for (const e of s.graphEdges) {
-      const list = parentsByChild.get(e.target);
-      if (list) list.push(e.source);
-      else parentsByChild.set(e.target, [e.source]);
-    }
-
-    const next = { ...s.expandedByProduct };
-    const best = new Map<string, number>();
-    const q: Array<{ id: string; rem: number }> = [{ id: nodeId, rem: hops }];
-
-    while (q.length) {
-      const { id, rem } = q.shift()!;
-      const n = nodeById.get(id);
-      if (!n) continue;
-
-      const prev = best.get(id) ?? -1;
-      if (rem > prev) {
-        best.set(id, rem);
-        const curAllow = next[n.product] ?? 0;
-        if (rem > curAllow) next[n.product] = rem;
-        if (rem - 1 > 0) {
-          const parents = parentsByChild.get(id) || [];
-          parents.forEach((p) => q.push({ id: p, rem: rem - 1 }));
-        }
-      }
-    }
-
-    set({ expandedByProduct: next });
+    const cur = s.expandedByNode[nodeId] ?? 0;
+    set({ expandedByNode: { ...s.expandedByNode, [nodeId]: cur + Math.max(1, hops) } });
     s.build();
   },
 
-  expandBranchAll: (nodeId) => {
-    get().expandBranchBy(nodeId, 50);
-  },
-
-  collapseBranch: (nodeId) => {
-    const s = get();
-    const nodeById = new Map(s.graphNodes.map((n) => [n.id, n] as const));
-    const parentsByChild = new Map<string, string[]>();
-    for (const e of s.graphEdges) {
-      const list = parentsByChild.get(e.target);
-      if (list) list.push(e.source);
-      else parentsByChild.set(e.target, [e.source]);
-    }
-
-    const toZero = new Set<string>(); // product names to zero out
-    const seen = new Set<string>();
-    const q: string[] = [nodeId];
-    while (q.length) {
-      const id = q.shift()!;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      const n = nodeById.get(id);
-      if (n) {
-        toZero.add(n.product);
-        const parents = parentsByChild.get(id) || [];
-        parents.forEach((p) => q.push(p));
-      }
-    }
-
-    const next = { ...s.expandedByProduct };
-    for (const p of toZero) next[p] = 0;
-
-    set({ expandedByProduct: next });
-    s.build();
-  },
-
+  /** Swap the recipe at a node and rebuild (migrates expansion budget to the new node id). */
   swapNodeRecipe: (nodeId, recipeId) => {
     const s = get();
     const node = s.graphNodes.find((n) => n.id === nodeId);
@@ -418,19 +331,33 @@ export const usePlanner = create<State>((set, get) => ({
     const chosen = list.find((r) => r.recipeId === recipeId);
     const building = chosen?.building;
 
+    // migrate expansion counter from old node id -> new node id
+    const prevBudget = s.expandedByNode[nodeId] ?? 0;
+    const newId = nodeIdFor(node.product, recipeId);
+
+    const nextExpanded = { ...s.expandedByNode };
+    if (prevBudget > 0) {
+      nextExpanded[newId] = Math.max(prevBudget, nextExpanded[newId] ?? 0);
+    }
+    delete nextExpanded[nodeId];
+
     set({
       choicesRecipe: { ...s.choicesRecipe, [node.product]: recipeId },
       choicesBuilding: building ? { ...s.choicesBuilding, [node.product]: building } : s.choicesBuilding,
+      expandedByNode: nextExpanded,
     });
 
     s.build();
   },
 
+  // focus/compact utilities used by ChainGraph
+  setFocusedNode: (id) => set({ focusedNodeId: id }),
+  toggleFocus: (id) =>
+    set((st) => ({ focusedNodeId: st.focusedNodeId === id ? null : id })),
+  toggleCompactMode: () => set((st) => ({ compactMode: !st.compactMode })),
+
   recomputeTotals: () => {
-    const { graphNodes, graphEdges } = get();
-    set({
-      totals: computeTotals(graphNodes),
-      frontierNeeds: computeFrontierNeeds(graphNodes, graphEdges),
-    });
+    const { graphNodes } = get();
+    set({ totals: computeTotals(graphNodes) });
   },
 }));
